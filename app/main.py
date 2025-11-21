@@ -2,9 +2,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 import asyncio
-import json
 import numpy as np
-from .models import Missile, Target, calculate_firing_solution
+from .models import Missile, Target, find_perfect_trajectory
 
 app = FastAPI()
 templates = Jinja2Templates(directory="app/templates")
@@ -20,82 +19,84 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
 
     try:
-        # 1. Получаем начальные параметры от клиента
+        # 1. Получаем начальные настройки от пользователя
         data = await websocket.receive_json()
+        start_ws = float(data['wind_speed'])
+        start_wd = float(data['wind_dir'])
 
-        # Начальный ветер (из настроек)
-        wind_speed = float(data['wind_speed'])
-        wind_dir = float(data['wind_dir'])  # в градусах
+        # Формируем вектор начального ветра
+        wx = start_ws * np.cos(np.radians(start_wd))
+        wy = start_ws * np.sin(np.radians(start_wd))
+        initial_wind = np.array([wx, wy, 0.0], dtype=float)
 
-        # Конвертируем ветер в вектор (X, Y, 0)
-        wx = wind_speed * np.cos(np.radians(wind_dir))
-        wy = wind_speed * np.sin(np.radians(wind_dir))
-        current_wind = np.array([wx, wy, 0.0])
-
-        # Параметры цели (летит на высоте 5км)
+        # 2. Определяем ЦЕЛЬ (прямо в коде, как просили)
+        # Цель летит на встречу и немного вниз
         target_config = {
-            'x': 2000, 'y': 5000, 'z': 3000,
-            'vx': 100, 'vy': -200, 'vz': 0
+            'x': 4000, 'y': 6000, 'z': 4000,  # Старт далеко
+            'vx': -50, 'vy': -300, 'vz': -50  # Скорость (м/с)
         }
 
-        # Параметры ракеты
-        missile_config = {
-            'x': 0, 'y': 0, 'z': 0,
-            'mass': 50.0,  # пустая масса
-            'fuel_mass': 40.0,  # топливо
-            'burn_time': 10.0,  # время работы двигателя
-            'thrust': 3000.0,  # сила тяги (Н)
-            'drag_coeff': 0.3,
-            'area': 0.05
-        }
+        # 3. Определяем РАКЕТУ
+        missile_template = Missile(
+            x=0, y=0, z=0,
+            mass=60.0,
+            fuel_mass=40.0,
+            burn_time=10.0,
+            thrust=8000.0,  # Достаточная тяга
+            drag_coeff=0.2,
+            area=0.05
+        )
 
-        # 2. Рассчитываем вектор запуска ИДЕАЛЬНО под начальный ветер
-        # Ракета "программируется" на этот полет
-        launch_vec = calculate_firing_solution(missile_config, target_config, current_wind)
+        # 4. ГЛАВНЫЙ РАСЧЕТ (Solving)
+        # Рассчитываем, куда нужно повернуть пусковую установку, чтобы попасть
+        # при ЭТОМ начальном ветре.
+        perfect_launch_vector = find_perfect_trajectory(missile_template, target_config, initial_wind)
 
-        # Инициализация объектов
-        missile = Missile(**missile_config)
+        # 5. Запуск реальной симуляции
+        missile = missile_template.copy()
         target = Target(**target_config)
 
-        dt = 0.05  # Шаг времени 50мс
+        # Текущий ветер (может меняться пользователем)
+        current_wind = initial_wind.copy()
+
+        dt = 0.05
         max_time = 15.0
         current_time = 0.0
 
-        # Цикл симуляции
         while current_time < max_time:
-            # Проверяем, не прислал ли пользователь новые данные о ветре
+            # Проверка обновлений от клиента (изменение ветра в реал-тайме)
             try:
-                # Используем asyncio.wait_for с малым таймаутом для неблокирующего чтения
                 incoming = await asyncio.wait_for(websocket.receive_json(), timeout=0.001)
                 if 'wind_speed' in incoming:
                     ws = float(incoming['wind_speed'])
                     wd = float(incoming['wind_dir'])
+                    # Обновляем текущий ветер
                     current_wind[0] = ws * np.cos(np.radians(wd))
                     current_wind[1] = ws * np.sin(np.radians(wd))
             except asyncio.TimeoutError:
-                pass  # Данных нет, продолжаем
-            except Exception as e:
+                pass  # Ничего не пришло, продолжаем с текущим ветром
+            except Exception:
                 break
 
-            # Обновление физики
-            m_pos = missile.update(dt, current_wind, launch_direction=launch_vec)
+            # ФИЗИКА
+            # Передаем perfect_launch_vector. Ракета пытается лететь по нему.
+            # Если current_wind отличается от initial_wind, аэродинамика сдвинет ракету -> промах.
+            m_pos = missile.update(dt, current_wind, launch_direction=perfect_launch_vector)
             t_pos = target.update(dt)
 
-            # Расчет дистанции (промаха/попадания)
-            distance = np.linalg.norm(np.array(m_pos) - np.array(t_pos))
+            dist = np.linalg.norm(np.array(m_pos) - np.array(t_pos))
 
-            # Отправка данных
             response = {
                 "time": round(current_time, 2),
                 "missile": m_pos,
                 "target": t_pos,
-                "distance": round(distance, 2),
+                "distance": round(dist, 2),
                 "wind": current_wind.tolist()
             }
             await websocket.send_json(response)
 
             current_time += dt
-            await asyncio.sleep(dt)  # Реальное время
+            await asyncio.sleep(dt)
 
         await websocket.close()
 

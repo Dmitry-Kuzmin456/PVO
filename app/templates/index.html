@@ -10,33 +10,27 @@
         .visual { flex-grow: 1; background: white; padding: 10px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         #graph { width: 100%; height: 700px; }
         .stat-box { margin-top: 20px; padding: 10px; background: #eef; border-radius: 4px; }
-        h2 { margin-top: 0; }
-        label { display: block; margin-top: 10px; font-weight: bold; }
-        input[type="range"] { width: 100%; }
-        .val-display { font-weight: normal; color: #555; }
         button { width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; margin-top: 20px; }
         button:hover { background: #0056b3; }
         button:disabled { background: #ccc; }
     </style>
 </head>
 <body>
-    <h1>Моделирование траектории ПВО (15 сек)</h1>
+    <h1>Моделирование траектории ПВО</h1>
     <div class="container">
         <div class="controls">
-            <h2>Параметры</h2>
-
-            <label>Скорость ветра (м/с): <span id="ws-val" class="val-display">0</span></label>
+            <h3>Параметры ветра</h3>
+            <label>Скорость (м/с): <span id="ws-val">0</span></label>
             <input type="range" id="wind-speed" min="0" max="100" value="0">
 
-            <label>Направление ветра (град): <span id="wd-val" class="val-display">0</span></label>
+            <label>Направление (град): <span id="wd-val">0</span></label>
             <input type="range" id="wind-dir" min="0" max="360" value="0">
 
             <div class="stat-box">
                 <p>Время: <span id="time-disp">0.0</span> с</p>
-                <p>Дистанция до цели: <span id="dist-disp">---</span> м</p>
-                <p style="font-size: 0.9em; color: #666;">*Изменяйте ветер во время полета, чтобы увидеть отклонение траектории.</p>
+                <p>Высота ракеты: <span id="alt-disp">0</span> м</p>
+                <p>Дистанция: <span id="dist-disp">---</span> м</p>
             </div>
-
             <button id="start-btn" onclick="startSimulation()">Запуск</button>
         </div>
         <div class="visual">
@@ -48,48 +42,30 @@
         let socket;
         let isRunning = false;
 
-        // Инициализация графика
         const layout = {
             title: 'Траектория полета',
             scene: {
-                xaxis: {range: [-1000, 5000], title: 'X (Восток)'},
-                yaxis: {range: [-1000, 6000], title: 'Y (Север)'},
-                zaxis: {range: [0, 5000], title: 'Z (Высота)'},
-                aspectmode: 'manual',
-                aspectratio: {x:1, y:1, z:0.5}
+                // Убираем жесткие границы, чтобы камера следила за объектами
+                aspectmode: 'data'
             },
             margin: {l: 0, r: 0, b: 0, t: 30}
         };
 
-        const missileTrace = {
-            x: [0], y: [0], z: [0],
-            mode: 'lines+markers',
-            marker: {size: 4, color: 'red'},
-            line: {width: 4},
-            type: 'scatter3d',
-            name: 'Снаряд ПВО'
-        };
+        // Инициализируем пустой график
+        Plotly.newPlot('graph', [{
+            type: 'scatter3d', mode: 'lines+markers', name: 'Ракета',
+            x: [0], y: [0], z: [0], marker: {color:'red', size:4}
+        }, {
+            type: 'scatter3d', mode: 'lines+markers', name: 'Цель',
+            x: [2000], y: [5000], z: [3000], marker: {color:'blue', size:4}
+        }], layout);
 
-        const targetTrace = {
-            x: [], y: [], z: [],
-            mode: 'lines+markers',
-            marker: {size: 4, color: 'blue'},
-            line: {width: 2, dash: 'dash'},
-            type: 'scatter3d',
-            name: 'Цель'
-        };
-
-        Plotly.newPlot('graph', [missileTrace, targetTrace], layout);
-
-        // Управление вводом
         const wsInput = document.getElementById('wind-speed');
         const wdInput = document.getElementById('wind-dir');
-        const wsVal = document.getElementById('ws-val');
-        const wdVal = document.getElementById('wd-val');
 
         function updateInputs() {
-            wsVal.innerText = wsInput.value;
-            wdVal.innerText = wdInput.value;
+            document.getElementById('ws-val').innerText = wsInput.value;
+            document.getElementById('wd-val').innerText = wdInput.value;
             if (isRunning && socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify({
                     wind_speed: wsInput.value,
@@ -104,22 +80,21 @@
         function startSimulation() {
             if (isRunning) return;
 
-            const btn = document.getElementById('start-btn');
-            btn.disabled = true;
-            btn.innerText = "Симуляция идет...";
+            document.getElementById('start-btn').disabled = true;
             isRunning = true;
 
-            // Сброс трасс
+            // Очищаем графики
             Plotly.restyle('graph', {x: [[0]], y: [[0]], z: [[0]]}, [0]);
+            Plotly.restyle('graph', {x: [[2000]], y: [[5000]], z: [[3000]]}, [1]);
 
             const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
             socket = new WebSocket(`${protocol}://${window.location.host}/ws/simulate`);
 
-            let mX = [], mY = [], mZ = [];
-            let tX = [], tY = [], tZ = [];
+            // Буферы для накопления точек
+            let mX = [0], mY = [0], mZ = [0];
+            let tX = [2000], tY = [5000], tZ = [3000];
 
             socket.onopen = function() {
-                // Отправляем начальные условия
                 socket.send(JSON.stringify({
                     wind_speed: wsInput.value,
                     wind_dir: wdInput.value
@@ -130,13 +105,18 @@
                 const data = JSON.parse(event.data);
 
                 document.getElementById('time-disp').innerText = data.time;
+                document.getElementById('alt-disp').innerText = Math.round(data.missile[2]);
                 document.getElementById('dist-disp').innerText = data.distance;
 
-                // Накапливаем точки
-                mX.push(data.missile[0]); mY.push(data.missile[1]); mZ.push(data.missile[2]);
-                tX.push(data.target[0]); tY.push(data.target[1]); tZ.push(data.target[2]);
+                mX.push(data.missile[0]);
+                mY.push(data.missile[1]);
+                mZ.push(data.missile[2]);
 
-                // Обновляем график (через animate или restyle для производительности лучше extendTraces, но здесь restyle проще для логики)
+                tX.push(data.target[0]);
+                tY.push(data.target[1]);
+                tZ.push(data.target[2]);
+
+                // Обновляем график
                 Plotly.restyle('graph', {
                     x: [mX, tX],
                     y: [mY, tY],
@@ -146,16 +126,8 @@
 
             socket.onclose = function() {
                 isRunning = false;
-                btn.disabled = false;
-                btn.innerText = "Запуск";
-
-                // Финальный результат
-                const finalDist = document.getElementById('dist-disp').innerText;
-                if (parseFloat(finalDist) < 100) {
-                    alert(`Попадание! Промах составил всего ${finalDist} м.`);
-                } else {
-                    alert(`Промах! Дистанция: ${finalDist} м. Изменение ветра сбило ракету с курса.`);
-                }
+                document.getElementById('start-btn').disabled = false;
+                console.log("Connection closed");
             };
         }
     </script>
