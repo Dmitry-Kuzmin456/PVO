@@ -1,11 +1,14 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from loguru import logger
 import asyncio
 import numpy as np
 from .models import Missile, Target, find_perfect_trajectory
 
 app = FastAPI()
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
 
@@ -21,8 +24,13 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         # 1. Получаем начальные настройки от пользователя
         data = await websocket.receive_json()
-        start_ws = float(data['wind_speed'])
-        start_wd = float(data['wind_dir'])
+        try:
+            start_ws = float(data.get('wind_speed'))
+            start_wd = float(data.get('wind_dir'))
+        except (TypeError, ValueError):
+            await websocket.send_json({"error": "invalid wind_speed or wind_dir"})
+            await websocket.close()
+            return
 
         # Формируем вектор начального ветра
         wx = start_ws * np.cos(np.radians(start_wd))
@@ -49,8 +57,11 @@ async def websocket_endpoint(websocket: WebSocket):
 
         # 4. ГЛАВНЫЙ РАСЧЕТ (Solving)
         # Рассчитываем, куда нужно повернуть пусковую установку, чтобы попасть
-        # при ЭТОМ начальном ветре.
-        perfect_launch_vector = find_perfect_trajectory(missile_template, target_config, initial_wind)
+        # при ЭТОМ начальном ветре. Запуск расчёта в отдельном потоке, чтобы
+        # не блокировать loop при тяжёлой виртуальной симуляции.
+        perfect_launch_vector = await asyncio.to_thread(
+            find_perfect_trajectory, missile_template, target_config, initial_wind
+        )
 
         # 5. Запуск реальной симуляции
         missile = missile_template.copy()
@@ -66,7 +77,8 @@ async def websocket_endpoint(websocket: WebSocket):
         while current_time < max_time:
             # Проверка обновлений от клиента (изменение ветра в реал-тайме)
             try:
-                incoming = await asyncio.wait_for(websocket.receive_json(), timeout=0.001)
+                # Небольшой ненулевой таймаут, чтобы не перегружать loop
+                incoming = await asyncio.wait_for(websocket.receive_json(), timeout=0.02)
                 if 'wind_speed' in incoming:
                     ws = float(incoming['wind_speed'])
                     wd = float(incoming['wind_dir'])
@@ -75,7 +87,13 @@ async def websocket_endpoint(websocket: WebSocket):
                     current_wind[1] = ws * np.sin(np.radians(wd))
             except asyncio.TimeoutError:
                 pass  # Ничего не пришло, продолжаем с текущим ветром
-            except Exception:
+            except asyncio.CancelledError:
+                break
+            except WebSocketDisconnect:
+                logger.info("Client disconnected during receive")
+                break
+            except Exception as e:
+                logger.exception("Unexpected error receiving websocket message")
                 break
 
             # ФИЗИКА
@@ -98,7 +116,14 @@ async def websocket_endpoint(websocket: WebSocket):
             current_time += dt
             await asyncio.sleep(dt)
 
-        await websocket.close()
+        # Гарантированно закрываем соединение по завершении цикла
+        try:
+            await websocket.close()
+        except Exception:
+            logger.exception("Error while closing websocket")
+            pass
 
     except WebSocketDisconnect:
-        print("Client disconnected")
+        logger.info("Client disconnected (outer)")
+    except Exception as e:
+        logger.exception("Error in websocket handler")

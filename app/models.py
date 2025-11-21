@@ -1,4 +1,5 @@
 import numpy as np
+from loguru import logger
 
 # Физические константы
 G = 9.81
@@ -15,6 +16,7 @@ class Missile:
 
         self.mass_empty = mass
         self.fuel_mass = fuel_mass
+        self.fuel_remaining = fuel_mass
         self.current_mass = mass + fuel_mass
         self.burn_time = burn_time
         self.thrust_force = thrust
@@ -33,9 +35,14 @@ class Missile:
         """
 
         # 1. Сжигание топлива
-        if self.time_elapsed < self.burn_time:
+        # Расход топлива: уменьшаем `fuel_remaining` и массу только пока есть топливо
+        if self.time_elapsed < self.burn_time and self.fuel_remaining > 0.0:
             dm = self.fuel_mass / self.burn_time
-            self.current_mass -= dm * dt
+            consumed = dm * dt
+            if consumed > self.fuel_remaining:
+                consumed = self.fuel_remaining
+            self.fuel_remaining -= consumed
+            self.current_mass -= consumed
 
         if self.current_mass < self.mass_empty:
             self.current_mass = self.mass_empty
@@ -46,7 +53,8 @@ class Missile:
         # Самый важный момент: Тяга направлена строго туда, куда мы ее направили при расчете.
         # Она НЕ корректируется в полете. Поэтому изменение ветра приведет к промаху.
         F_thrust = np.array([0.0, 0.0, 0.0])
-        if self.time_elapsed < self.burn_time and launch_direction is not None:
+        # Тяга действует только если ещё есть топливо и время горения
+        if self.time_elapsed < self.burn_time and launch_direction is not None and self.fuel_remaining > 0.0:
             F_thrust = launch_direction * self.thrust_force
 
         # Б. ГРАВИТАЦИЯ
@@ -67,6 +75,11 @@ class Missile:
         F_total = F_thrust + F_gravity + F_drag
 
         # 3. Интеграция (Эйлер)
+        # Защита от деления на ноль на случай некорректных масс
+        if self.current_mass <= 0:
+            logger.warning("current_mass <= 0 in Missile.update; forcing to mass_empty or small positive value")
+            self.current_mass = max(self.mass_empty, 1e-6)
+
         acc = F_total / self.current_mass
         self.vel += acc * dt
         self.pos += self.vel * dt
@@ -91,7 +104,7 @@ def find_perfect_trajectory(missile_template, target_config, initial_wind):
     Запускает виртуальные симуляции, подбирая идеальный вектор запуска.
     Гарантирует попадание при initial_wind.
     """
-    print(f"Calculations started. Wind: {initial_wind}")
+    logger.info(f"Calculations started. Wind: {initial_wind}")
 
     # 1. Данные цели
     t_pos_0 = np.array([target_config['x'], target_config['y'], target_config['z']])
@@ -105,7 +118,13 @@ def find_perfect_trajectory(missile_template, target_config, initial_wind):
     aim_point[2] += 0.5 * G * (estimated_time ** 2)  # Компенсация падения
 
     # Нормализуем вектор направления
-    launch_dir = aim_point / np.linalg.norm(aim_point)
+    # Нормализация с защитой от деления на ноль
+    norm = np.linalg.norm(aim_point)
+    if norm == 0:
+        logger.warning("aim_point norm is zero in find_perfect_trajectory; using default direction")
+        launch_dir = np.array([1.0, 0.0, 0.0])
+    else:
+        launch_dir = aim_point / norm
 
     # 3. Цикл подбора (Zeroing)
     # Делаем до 15 попыток уточнить прицел
@@ -138,7 +157,7 @@ def find_perfect_trajectory(missile_template, target_config, initial_wind):
 
         # Если попали достаточно близко (< 1 метра) — стоп
         if closest_dist < 1.0:
-            print(f"Solution found at iter {i}: Miss {closest_dist:.2f}m")
+            logger.info(f"Solution found at iter {i}: Miss {closest_dist:.2f}m")
             return best_dir
 
         # КОРРЕКЦИЯ
@@ -151,10 +170,16 @@ def find_perfect_trajectory(missile_template, target_config, initial_wind):
         aim_point = best_dir * 10000  # Условно на 10км
         aim_point += miss_vector * correction_factor
 
-        best_dir = aim_point / np.linalg.norm(aim_point)
+        # Нормализация с защитой
+        norm = np.linalg.norm(aim_point)
+        if norm == 0:
+            logger.warning("aim_point norm is zero when updating best_dir; keeping previous best_dir")
+            # keep previous best_dir unchanged
+        else:
+            best_dir = aim_point / norm
 
         if closest_dist < min_error:
             min_error = closest_dist
 
-    print(f"Best solution found: Miss {min_error:.2f}m")
+    logger.info(f"Best solution found: Miss {min_error:.2f}m")
     return best_dir

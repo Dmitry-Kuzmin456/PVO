@@ -3,3 +3,4 @@ uvicorn
 numpy
 jinja2
 websockets
+loguru
