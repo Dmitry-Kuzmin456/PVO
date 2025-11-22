@@ -109,7 +109,7 @@ async def websocket_endpoint(websocket: WebSocket):
         dt = 0.01
         max_time = 25.0
         current_time = 0.0
-        collision_threshold = 3.0  # meters — target threshold for hit
+        collision_threshold = 3.0  # meters — target threshold for hit (user-requested)
         prev_dist = float('inf')
         last_m_pos = None
         last_t_pos = None
@@ -120,6 +120,9 @@ async def websocket_endpoint(websocket: WebSocket):
         min_dist = float('inf')
         min_m_pos = None
         min_t_pos = None
+        min_time = None
+        min_m_vel = None
+        got_hit = False
 
         while current_time < max_time:
             # Проверка обновлений от клиента (изменение ветра в реал-тайме)
@@ -156,6 +159,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 min_dist = dist
                 min_m_pos = m_pos
                 min_t_pos = t_pos
+                min_time = current_time
+                try:
+                    min_m_vel = np.array(missile.vel, dtype=float)
+                except Exception:
+                    min_m_vel = None
 
             # Если дистанция упала ниже порога — считаем попадание
             if dist <= collision_threshold:
@@ -177,6 +185,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 }
 
                 await websocket.send_json(response)
+                got_hit = True
                 break
 
             # Обнаружение прохождения цели между шагами: если дистанция начала расти после минимума
@@ -202,6 +211,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 }
 
                 await websocket.send_json(response)
+                got_hit = True
                 break
 
             # Отправляем фреймы клиенту с шагом send_interval
@@ -228,6 +238,28 @@ async def websocket_endpoint(websocket: WebSocket):
             await asyncio.sleep(dt)
 
         # Гарантированно закрываем соединение по завершении цикла
+        # Если цикл завершился без попадания — отправляем итоговую сводку
+        if not got_hit:
+            try:
+                final_summary = {
+                    "time": f"{current_time:.2f}",
+                    "missile": missile.pos.tolist(),
+                    "missile_velocity": missile.vel.tolist(),
+                    "missile_speed": round(float(np.linalg.norm(missile.vel)), 2),
+                    "target": t_pos,
+                    "distance": round(dist, 2),
+                    "min_distance": (round(min_dist, 2) if min_dist != float('inf') else None),
+                    "closest_missile": (min_m_pos if min_m_pos is not None else None),
+                    "closest_target": (min_t_pos if min_t_pos is not None else None),
+                    "closest_time": (f"{min_time:.2f}" if min_time is not None else None),
+                    "closest_missile_speed": (round(float(np.linalg.norm(min_m_vel)), 2) if min_m_vel is not None else None),
+                    "wind": current_wind.tolist(),
+                    "hit": False,
+                    "note": "simulation_finished_no_hit"
+                }
+                await websocket.send_json(final_summary)
+            except Exception:
+                logger.exception("Failed to send final summary to client")
         try:
             await websocket.close()
         except Exception:

@@ -59,6 +59,10 @@ function startSimulation() {
                 wind_dir: Number(wdInput.value),
                 precision: document.getElementById('precision-select').value
             }));
+        // During simulation show only the default fields
+        // hide the extra rows during the run
+        document.getElementById('min-dist-row').style.display = 'none';
+        document.getElementById('closest-time-row').style.display = 'none';
     };
 
     socket.onmessage = function(event) {
@@ -70,9 +74,23 @@ function startSimulation() {
         document.getElementById('alt-disp').innerText = Math.round(data.missile[2]);
         // format distance to two decimals
         document.getElementById('dist-disp').innerText = (typeof data.distance === 'number') ? data.distance.toFixed(2) : data.distance;
-        // display missile speed if provided
+        // Update min distance and closest time if provided (final summary)
+        if (data.min_distance !== undefined && data.min_distance !== null) {
+            document.getElementById('min-dist-disp').innerText = Number(data.min_distance).toFixed(2);
+            document.getElementById('min-dist-row').style.display = '';
+        }
+        if (data.closest_time !== undefined && data.closest_time !== null) {
+            document.getElementById('closest-time-disp').innerText = data.closest_time;
+            document.getElementById('closest-time-row').style.display = '';
+        }
+        // display missile speed if provided (during sim/hit it's current speed)
         if (data.missile_speed !== undefined) {
             document.getElementById('speed-disp').innerText = Number(data.missile_speed).toFixed(2);
+        }
+
+        // If the server provides closest_missile_speed (final summary), show it in the speed field
+        if (data.closest_missile_speed !== undefined && data.closest_missile_speed !== null) {
+            document.getElementById('speed-disp').innerText = Number(data.closest_missile_speed).toFixed(2);
         }
 
         mX.push(data.missile[0]);
@@ -92,10 +110,35 @@ function startSimulation() {
 
         // Если было попадание — остановить симуляцию и разблокировать кнопку
         if (data.hit) {
+            // On hit: stop simulation and keep extra rows hidden
             isRunning = false;
             document.getElementById('start-btn').disabled = false;
             try { socket.close(); } catch (e) {}
+            document.getElementById('min-dist-row').style.display = 'none';
+            document.getElementById('closest-time-row').style.display = 'none';
+            // ensure speed shows current missile speed (if provided)
+            if (data.missile_speed !== undefined) {
+                document.getElementById('speed-disp').innerText = Number(data.missile_speed).toFixed(2);
+            }
             console.log('Hit detected, simulation stopped.');
+        }
+
+        // If server ended simulation without hit, it sends a final summary with note
+        if (data.note === 'simulation_finished_no_hit') {
+            // On miss: show extra rows and set speed to closest_missile_speed if provided
+            isRunning = false;
+            document.getElementById('start-btn').disabled = false;
+            try { socket.close(); } catch (e) {}
+            console.log('Simulation finished without hit; final summary received.');
+            if (data.min_distance !== undefined && data.min_distance !== null) {
+                document.getElementById('min-dist-row').style.display = '';
+            }
+            if (data.closest_time !== undefined && data.closest_time !== null) {
+                document.getElementById('closest-time-row').style.display = '';
+            }
+            if (data.closest_missile_speed !== undefined && data.closest_missile_speed !== null) {
+                document.getElementById('speed-disp').innerText = Number(data.closest_missile_speed).toFixed(2);
+            }
         }
     };
 
