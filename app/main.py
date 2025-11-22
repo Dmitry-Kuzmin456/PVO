@@ -7,6 +7,21 @@ import asyncio
 import numpy as np
 from .models import Missile, Target, find_perfect_trajectory
 
+# Simple in-memory cache for computed launch vectors
+_LAUNCH_VECTOR_CACHE = {}
+
+def _make_cache_key(missile_template, target_config, wind_vec, precision):
+    # Build a simple tuple key based on rounded parameters
+    m = missile_template
+    key = (
+        round(wind_vec[0], 3), round(wind_vec[1], 3), round(wind_vec[2], 3),
+        int(target_config['x']), int(target_config['y']), int(target_config['z']),
+        int(target_config['vx']), int(target_config['vy']), int(target_config['vz']),
+        round(m.mass_empty, 3), round(m.fuel_mass, 3), round(m.thrust_force, 3),
+        precision
+    )
+    return key
+
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
@@ -59,9 +74,30 @@ async def websocket_endpoint(websocket: WebSocket):
         # Рассчитываем, куда нужно повернуть пусковую установку, чтобы попасть
         # при ЭТОМ начальном ветре. Запуск расчёта в отдельном потоке, чтобы
         # не блокировать loop при тяжёлой виртуальной симуляции.
-        perfect_launch_vector = await asyncio.to_thread(
-            find_perfect_trajectory, missile_template, target_config, initial_wind
-        )
+        precision = data.get('precision', 'fast')
+
+        cache_key = _make_cache_key(missile_template, target_config, initial_wind.tolist(), precision)
+        perfect_launch_vector = None
+        if cache_key in _LAUNCH_VECTOR_CACHE:
+            perfect_launch_vector = _LAUNCH_VECTOR_CACHE[cache_key]
+        else:
+            # choose parameters for fast vs accurate
+            if precision == 'fast':
+                # fast: coarser grid, shorter sim time, larger dt
+                params = dict(sim_time_max=20.0, az_steps=36, el_steps=18,
+                              coarse_dt=0.02, refine_dt=0.01, final_dt=0.005)
+            else:
+                # accurate: defaults in function (higher fidelity)
+                params = {}
+
+            perfect_launch_vector = await asyncio.to_thread(
+                find_perfect_trajectory, missile_template, target_config, initial_wind, **params
+            )
+            # cache result
+            try:
+                _LAUNCH_VECTOR_CACHE[cache_key] = perfect_launch_vector
+            except Exception:
+                pass
 
         # 5. Запуск реальной симуляции
         missile = missile_template.copy()
@@ -70,15 +106,26 @@ async def websocket_endpoint(websocket: WebSocket):
         # Текущий ветер (может меняться пользователем)
         current_wind = initial_wind.copy()
 
-        dt = 0.05
-        max_time = 15.0
+        dt = 0.01
+        max_time = 25.0
         current_time = 0.0
+        collision_threshold = 3.0  # meters — target threshold for hit
+        prev_dist = float('inf')
+        last_m_pos = None
+        last_t_pos = None
+        # Отправляем данные клиенту с интервалом 0.01 с (повышенная частота)
+        send_interval = 0.01  # seconds between frames sent to client
+        last_send_time = -send_interval
+        # Для надёжной детекции пересечения: отслеживаем минимум дистанции и позицию в этот момент
+        min_dist = float('inf')
+        min_m_pos = None
+        min_t_pos = None
 
         while current_time < max_time:
             # Проверка обновлений от клиента (изменение ветра в реал-тайме)
             try:
                 # Небольшой ненулевой таймаут, чтобы не перегружать loop
-                incoming = await asyncio.wait_for(websocket.receive_json(), timeout=0.02)
+                incoming = await asyncio.wait_for(websocket.receive_json(), timeout=0.005)
                 if 'wind_speed' in incoming:
                     ws = float(incoming['wind_speed'])
                     wd = float(incoming['wind_dir'])
@@ -104,14 +151,78 @@ async def websocket_endpoint(websocket: WebSocket):
 
             dist = np.linalg.norm(np.array(m_pos) - np.array(t_pos))
 
-            response = {
-                "time": round(current_time, 2),
-                "missile": m_pos,
-                "target": t_pos,
-                "distance": round(dist, 2),
-                "wind": current_wind.tolist()
-            }
-            await websocket.send_json(response)
+            # Обновляем минимум дистанции и запоминаем позиции в момент минимума
+            if dist < min_dist:
+                min_dist = dist
+                min_m_pos = m_pos
+                min_t_pos = t_pos
+
+            # Если дистанция упала ниже порога — считаем попадание
+            if dist <= collision_threshold:
+                missile.pos = np.array(t_pos, dtype=float)
+                try:
+                    missile.vel = np.array([0.0, 0.0, 0.0], dtype=float)
+                except Exception:
+                    pass
+
+                response = {
+                    "time": f"{current_time:.2f}",
+                    "missile": missile.pos.tolist(),
+                    "missile_velocity": missile.vel.tolist(),
+                    "missile_speed": round(float(np.linalg.norm(missile.vel)), 2),
+                    "target": t_pos,
+                    "distance": round(dist, 2),
+                    "wind": current_wind.tolist(),
+                    "hit": True
+                }
+
+                await websocket.send_json(response)
+                break
+
+            # Обнаружение прохождения цели между шагами: если дистанция начала расти после минимума
+            if dist > prev_dist and min_dist <= (collision_threshold * 1.2):
+                # Используем позицию в момент минимума как точку столкновения
+                collision_point = min_t_pos if min_t_pos is not None else t_pos
+                missile.pos = np.array(collision_point, dtype=float)
+                try:
+                    missile.vel = np.array([0.0, 0.0, 0.0], dtype=float)
+                except Exception:
+                    pass
+
+                response = {
+                    "time": f"{current_time:.2f}",
+                    "missile": missile.pos.tolist(),
+                    "missile_velocity": missile.vel.tolist(),
+                    "missile_speed": round(float(np.linalg.norm(missile.vel)), 2),
+                    "target": collision_point,
+                    "distance": round(min_dist, 2),
+                    "wind": current_wind.tolist(),
+                    "hit": True,
+                    "note": "passed-through-detected"
+                }
+
+                await websocket.send_json(response)
+                break
+
+            # Отправляем фреймы клиенту с шагом send_interval
+            if (current_time - last_send_time) >= send_interval:
+                response = {
+                    "time": f"{current_time:.2f}",
+                    "missile": m_pos,
+                    "missile_velocity": missile.vel.tolist(),
+                    "missile_speed": round(float(np.linalg.norm(missile.vel)), 2),
+                    "target": t_pos,
+                    "distance": round(dist, 2),
+                    "wind": current_wind.tolist(),
+                    "hit": False
+                }
+                await websocket.send_json(response)
+                last_send_time = current_time
+
+            # Сохраняем предыдущие значения для детекции прохождения
+            prev_dist = dist
+            last_m_pos = m_pos
+            last_t_pos = t_pos
 
             current_time += dt
             await asyncio.sleep(dt)

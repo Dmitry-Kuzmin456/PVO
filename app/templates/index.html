@@ -21,8 +21,14 @@
             <div class="stat-box">
                 <p>Время: <span id="time-disp">0.0</span> с</p>
                 <p>Высота ракеты: <span id="alt-disp">0</span> м</p>
+                <p>Скорость ракеты: <span id="speed-disp">0.00</span> м/с</p>
                 <p>Дистанция: <span id="dist-disp">---</span> м</p>
             </div>
+            <label for="precision-select">Точность:</label>
+            <select id="precision-select">
+                <option value="fast" selected>Fast (быстро)</option>
+                <option value="accurate">Accurate (точно)</option>
+            </select>
             <button id="start-btn" onclick="startSimulation()">Запуск</button>
         </div>
         <div class="visual">
