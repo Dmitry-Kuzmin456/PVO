@@ -9,6 +9,8 @@ from .models import Missile, Target, find_perfect_trajectory, NEW_YORK_LATITUDE
 
 # Simple in-memory cache for computed launch vectors
 _LAUNCH_VECTOR_CACHE = {}
+_CALCULATION_RESULTS = {}  # Хранилище результатов расчетов
+
 
 def _make_cache_key(missile_template, target_config, wind_vec, precision):
     # Build a simple tuple key based on rounded parameters
@@ -23,6 +25,7 @@ def _make_cache_key(missile_template, target_config, wind_vec, precision):
     )
     return key
 
+
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
@@ -33,13 +36,20 @@ async def get(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
-@app.websocket("/ws/simulate")
-async def websocket_endpoint(websocket: WebSocket):
+@app.websocket("/ws/calculate")
+async def websocket_calculate(websocket: WebSocket):
     await websocket.accept()
 
     try:
-        # 1. Получаем начальные настройки от пользователя
+        # Получаем данные для расчета
         data = await websocket.receive_json()
+
+        # Проверяем, что это запрос на расчет
+        if data.get('action') != 'calculate':
+            await websocket.send_json({"error": "Invalid action"})
+            await websocket.close()
+            return
+
         try:
             start_ws = float(data.get('wind_speed'))
             start_wd = float(data.get('wind_dir'))
@@ -48,83 +58,159 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.close()
             return
 
-        # Небольшая задержка для демонстрации индикатора загрузки (опционально)
-        # await asyncio.sleep(1)
+        # Сообщаем клиенту о начале расчета
+        await websocket.send_json({"status": "calculating"})
 
         # Формируем вектор начального ветра
         wx = start_ws * np.cos(np.radians(start_wd))
         wy = start_ws * np.sin(np.radians(start_wd))
         initial_wind = np.array([wx, wy, 0.0], dtype=float)
 
-        # 2. Определяем ЦЕЛЬ (прямо в коде, как просили)
-        # Цель летит на встречу и немного вниз
+        # Определяем цель
         target_config = {
-            'x': 4000, 'y': 6000, 'z': 4000,  # Старт далеко
-            'vx': -50, 'vy': -300, 'vz': -50  # Скорость (м/с)
+            'x': 4000, 'y': 6000, 'z': 4000,
+            'vx': -50, 'vy': -300, 'vz': -50
         }
 
-        # 3. Определяем РАКЕТУ (с широтой Нью-Йорка)
+        # Определяем ракету
         missile_template = Missile(
             x=0, y=0, z=0,
             mass=60.0,
             fuel_mass=40.0,
             burn_time=10.0,
-            thrust=8000.0,  # Достаточная тяга
+            thrust=8000.0,
             drag_coeff=0.2,
             area=0.05,
-            latitude=NEW_YORK_LATITUDE  # Широта Нью-Йорка
+            latitude=NEW_YORK_LATITUDE
         )
 
-        # 4. ГЛАВНЫЙ РАСЧЕТ (Solving)
-        # Рассчитываем, куда нужно повернуть пусковую установку, чтобы попасть
-        # при ЭТОМ начальном ветре. Запуск расчёта в отдельном потоке, чтобы
-        # не блокировать loop при тяжёлой виртуальной симуляции.
+        # Расчет оптимальной траектории
         precision = data.get('precision', 'fast')
 
         cache_key = _make_cache_key(missile_template, target_config, initial_wind.tolist(), precision)
         perfect_launch_vector = None
+
         if cache_key in _LAUNCH_VECTOR_CACHE:
             perfect_launch_vector = _LAUNCH_VECTOR_CACHE[cache_key]
             logger.info("Using cached launch vector")
         else:
-            # choose parameters for fast vs accurate
+            # Выбираем параметры в зависимости от точности
             if precision == 'fast':
-                # fast: coarser grid, shorter sim time, larger dt
                 params = dict(sim_time_max=20.0, az_steps=36, el_steps=18,
                               coarse_dt=0.02, refine_dt=0.01, final_dt=0.005)
             else:
-                # accurate: defaults in function (higher fidelity)
                 params = {}
 
             logger.info(f"Calculating new trajectory with precision: {precision}")
             perfect_launch_vector = await asyncio.to_thread(
                 find_perfect_trajectory, missile_template, target_config, initial_wind, **params
             )
-            # cache result
+            # Кэшируем результат
             try:
                 _LAUNCH_VECTOR_CACHE[cache_key] = perfect_launch_vector
                 logger.info("Cached new launch vector")
             except Exception as e:
                 logger.error(f"Failed to cache result: {e}")
 
-        # 5. Запуск реальной симуляции
-        missile = missile_template.copy()
+        # Сохраняем результат расчета
+        calculation_id = str(hash(cache_key))
+        _CALCULATION_RESULTS[calculation_id] = {
+            'launch_vector': perfect_launch_vector.tolist(),
+            'target_config': target_config,
+            'missile_template': {
+                'x': 0, 'y': 0, 'z': 0,
+                'mass': 60.0, 'fuel_mass': 40.0, 'burn_time': 10.0,
+                'thrust': 8000.0, 'drag_coeff': 0.2, 'area': 0.05,
+                'latitude': NEW_YORK_LATITUDE
+            }
+        }
+
+        # Отправляем результат клиенту
+        await websocket.send_json({
+            "status": "calculated",
+            "calculation_id": calculation_id,
+            "trajectory_data": {
+                "launch_vector": perfect_launch_vector.tolist(),
+                "cache_used": cache_key in _LAUNCH_VECTOR_CACHE
+            }
+        })
+
+        await websocket.close()
+
+    except WebSocketDisconnect:
+        logger.info("Client disconnected from calculation")
+    except Exception as e:
+        logger.exception("Error in calculation websocket handler")
+        try:
+            await websocket.send_json({"error": str(e)})
+        except:
+            pass
+
+
+@app.websocket("/ws/simulate")
+async def websocket_simulate(websocket: WebSocket):
+    await websocket.accept()
+
+    try:
+        # Получаем данные для симуляции
+        data = await websocket.receive_json()
+
+        # Проверяем, что это запрос на симуляцию
+        if data.get('action') != 'simulate':
+            await websocket.send_json({"error": "Invalid action"})
+            await websocket.close()
+            return
+
+        trajectory_data = data.get('trajectory_data')
+        if not trajectory_data or 'launch_vector' not in trajectory_data:
+            await websocket.send_json({"error": "No trajectory data provided"})
+            await websocket.close()
+            return
+
+        try:
+            start_ws = float(data.get('wind_speed'))
+            start_wd = float(data.get('wind_dir'))
+            launch_vector = np.array(trajectory_data['launch_vector'], dtype=float)
+        except (TypeError, ValueError) as e:
+            await websocket.send_json({"error": f"invalid parameters: {str(e)}"})
+            await websocket.close()
+            return
+
+        # Формируем вектор начального ветра
+        wx = start_ws * np.cos(np.radians(start_wd))
+        wy = start_ws * np.sin(np.radians(start_wd))
+        initial_wind = np.array([wx, wy, 0.0], dtype=float)
+
+        # Определяем цель (такая же как при расчете)
+        target_config = {
+            'x': 4000, 'y': 6000, 'z': 4000,
+            'vx': -50, 'vy': -300, 'vz': -50
+        }
+
+        # Создаем ракету и цель
+        missile = Missile(
+            x=0, y=0, z=0,
+            mass=60.0,
+            fuel_mass=40.0,
+            burn_time=10.0,
+            thrust=8000.0,
+            drag_coeff=0.2,
+            area=0.05,
+            latitude=NEW_YORK_LATITUDE
+        )
         target = Target(**target_config)
 
         # Текущий ветер (может меняться пользователем)
         current_wind = initial_wind.copy()
 
+        # Параметры симуляции
         dt = 0.01
         max_time = 25.0
         current_time = 0.0
-        collision_threshold = 3.0  # meters — target threshold for hit (user-requested)
+        collision_threshold = 3.0
         prev_dist = float('inf')
-        last_m_pos = None
-        last_t_pos = None
-        # Отправляем данные клиенту с интервалом 0.01 с (повышенная частота)
-        send_interval = 0.01  # seconds between frames sent to client
+        send_interval = 0.01
         last_send_time = -send_interval
-        # Для надёжной детекции пересечения: отслеживаем минимум дистанции и позицию в этот момент
         min_dist = float('inf')
         min_m_pos = None
         min_t_pos = None
@@ -135,16 +221,14 @@ async def websocket_endpoint(websocket: WebSocket):
         while current_time < max_time:
             # Проверка обновлений от клиента (изменение ветра в реал-тайме)
             try:
-                # Небольшой ненулевой таймаут, чтобы не перегружать loop
                 incoming = await asyncio.wait_for(websocket.receive_json(), timeout=0.005)
                 if 'wind_speed' in incoming:
                     ws = float(incoming['wind_speed'])
                     wd = float(incoming['wind_dir'])
-                    # Обновляем текущий ветер
                     current_wind[0] = ws * np.cos(np.radians(wd))
                     current_wind[1] = ws * np.sin(np.radians(wd))
             except asyncio.TimeoutError:
-                pass  # Ничего не пришло, продолжаем с текущим ветром
+                pass
             except asyncio.CancelledError:
                 break
             except WebSocketDisconnect:
@@ -154,15 +238,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 logger.exception("Unexpected error receiving websocket message")
                 break
 
-            # ФИЗИКА
-            # Передаем perfect_launch_vector. Ракета пытается лететь по нему.
-            # Если current_wind отличается от initial_wind, аэродинамика сдвинет ракету -> промах.
-            m_pos = missile.update(dt, current_wind, launch_direction=perfect_launch_vector)
+            # ФИЗИКА - используем рассчитанный вектор запуска
+            m_pos = missile.update(dt, current_wind, launch_direction=launch_vector)
             t_pos = target.update(dt)
-
             dist = np.linalg.norm(np.array(m_pos) - np.array(t_pos))
 
-            # Обновляем минимум дистанции и запоминаем позиции в момент минимума
+            # Обновляем минимум дистанции
             if dist < min_dist:
                 min_dist = dist
                 min_m_pos = m_pos
@@ -191,14 +272,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     "wind": current_wind.tolist(),
                     "hit": True
                 }
-
                 await websocket.send_json(response)
                 got_hit = True
                 break
 
-            # Обнаружение прохождения цели между шагами: если дистанция начала расти после минимума
+            # Обнаружение прохождения цели между шагами
             if dist > prev_dist and min_dist <= (collision_threshold * 1.2):
-                # Используем позицию в момент минимума как точку столкновения
                 collision_point = min_t_pos if min_t_pos is not None else t_pos
                 missile.pos = np.array(collision_point, dtype=float)
                 try:
@@ -217,7 +296,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     "hit": True,
                     "note": "passed-through-detected"
                 }
-
                 await websocket.send_json(response)
                 got_hit = True
                 break
@@ -237,15 +315,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json(response)
                 last_send_time = current_time
 
-            # Сохраняем предыдущие значения для детекции прохождения
             prev_dist = dist
-            last_m_pos = m_pos
-            last_t_pos = t_pos
-
             current_time += dt
             await asyncio.sleep(dt)
 
-        # Гарантированно закрываем соединение по завершении цикла
         # Если цикл завершился без попадания — отправляем итоговую сводку
         if not got_hit:
             try:
@@ -260,7 +333,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     "closest_missile": (min_m_pos if min_m_pos is not None else None),
                     "closest_target": (min_t_pos if min_t_pos is not None else None),
                     "closest_time": (f"{min_time:.2f}" if min_time is not None else None),
-                    "closest_missile_speed": (round(float(np.linalg.norm(min_m_vel)), 2) if min_m_vel is not None else None),
+                    "closest_missile_speed": (
+                        round(float(np.linalg.norm(min_m_vel)), 2) if min_m_vel is not None else None),
                     "wind": current_wind.tolist(),
                     "hit": False,
                     "note": "simulation_finished_no_hit"
@@ -268,13 +342,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json(final_summary)
             except Exception:
                 logger.exception("Failed to send final summary to client")
-        try:
-            await websocket.close()
-        except Exception:
-            logger.exception("Error while closing websocket")
-            pass
+
+        await websocket.close()
 
     except WebSocketDisconnect:
-        logger.info("Client disconnected (outer)")
+        logger.info("Client disconnected from simulation")
     except Exception as e:
-        logger.exception("Error in websocket handler")
+        logger.exception("Error in simulation websocket handler")

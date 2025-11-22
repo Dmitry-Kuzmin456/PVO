@@ -30,13 +30,20 @@
                 <option value="fast" selected>Fast (быстро)</option>
                 <option value="accurate">Accurate (точно)</option>
             </select>
-            <button id="start-btn" onclick="startSimulation()">Запуск</button>
 
-            <!-- Компактный индикатор загрузки под кнопкой -->
+            <!-- Первая кнопка для расчета траектории -->
+            <button id="calculate-btn" onclick="calculateTrajectory()">Рассчитать траекторию</button>
+
+            <!-- Индикатор загрузки расчета -->
             <div id="loading-indicator" class="loading-indicator" style="display: none;">
                 <div class="compact-spinner"></div>
-                <span>Вычисление траектории...</span>
+                <span>Вычисление оптимальной траектории...</span>
             </div>
+
+            <!-- Вторая кнопка для запуска симуляции (изначально скрыта) -->
+            <button id="simulate-btn" onclick="startSimulation()" style="display: none; margin-top: 10px;">
+                Запустить симуляцию
+            </button>
         </div>
         <div class="visual">
             <div id="graph"></div>

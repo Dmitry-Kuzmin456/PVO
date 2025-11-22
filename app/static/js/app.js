@@ -1,10 +1,11 @@
 let socket;
 let isRunning = false;
+let isCalculating = false;
+let calculatedTrajectory = null;
 
 const layout = {
     title: 'Траектория полета',
     scene: {
-        // Убираем жесткие границы, чтобы камера следила за объектами
         aspectmode: 'data'
     },
     margin: {l: 0, r: 0, b: 0, t: 30}
@@ -44,43 +45,113 @@ function hideLoading() {
     document.getElementById('loading-indicator').style.display = 'none';
 }
 
-function startSimulation() {
-    if (isRunning) return;
+function showSimulateButton() {
+    document.getElementById('simulate-btn').style.display = 'block';
+}
 
-    document.getElementById('start-btn').disabled = true;
-    isRunning = true;
+function hideSimulateButton() {
+    document.getElementById('simulate-btn').style.display = 'none';
+}
 
-    // Показываем компактный индикатор загрузки
+function calculateTrajectory() {
+    if (isCalculating) return;
+
+    document.getElementById('calculate-btn').disabled = true;
+    isCalculating = true;
+
+    // Сбрасываем предыдущие результаты
+    calculatedTrajectory = null;
+    hideSimulateButton();
+
+    // Показываем индикатор загрузки
     showLoading();
 
-    // Очищаем графики с правильными начальными координатами
-    Plotly.restyle('graph', {x: [[0]], y: [[0]], z: [[0]]}, [0]); // Ракета
-    Plotly.restyle('graph', {x: [[4000]], y: [[6000]], z: [[4000]]}, [1]); // Цель - исправлено на 4000,6000,4000
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    socket = new WebSocket(`${protocol}://${window.location.host}/ws/calculate`);
+
+    socket.onopen = function() {
+        socket.send(JSON.stringify({
+            wind_speed: Number(wsInput.value),
+            wind_dir: Number(wdInput.value),
+            precision: document.getElementById('precision-select').value,
+            action: 'calculate'  // Указываем, что это расчет траектории
+        }));
+    };
+
+    socket.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+
+        if (data.status === 'calculating') {
+            // Сервер сообщает, что начал расчет
+            console.log('Расчет траектории начат...');
+        }
+        else if (data.status === 'calculated') {
+            // Расчет завершен успешно
+            calculatedTrajectory = data.trajectory_data;
+            hideLoading();
+            document.getElementById('calculate-btn').disabled = false;
+            isCalculating = false;
+            showSimulateButton();
+            console.log('Траектория рассчитана успешно');
+        }
+        else if (data.error) {
+            // Ошибка расчета
+            hideLoading();
+            document.getElementById('calculate-btn').disabled = false;
+            isCalculating = false;
+            console.error('Ошибка расчета:', data.error);
+            alert('Ошибка при расчете траектории: ' + data.error);
+        }
+    };
+
+    socket.onclose = function() {
+        isCalculating = false;
+        document.getElementById('calculate-btn').disabled = false;
+        hideLoading();
+        console.log("Calculation connection closed");
+    };
+
+    socket.onerror = function(error) {
+        isCalculating = false;
+        document.getElementById('calculate-btn').disabled = false;
+        hideLoading();
+        console.log("Calculation WebSocket error:", error);
+    };
+}
+
+function startSimulation() {
+    if (isRunning || !calculatedTrajectory) return;
+
+    document.getElementById('simulate-btn').disabled = true;
+    document.getElementById('calculate-btn').disabled = true;
+    isRunning = true;
+
+    // Очищаем графики
+    Plotly.restyle('graph', {x: [[0]], y: [[0]], z: [[0]]}, [0]);
+    Plotly.restyle('graph', {x: [[4000]], y: [[6000]], z: [[4000]]}, [1]);
 
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     socket = new WebSocket(`${protocol}://${window.location.host}/ws/simulate`);
 
-    // Буферы для накопления точек - тоже исправляем начальные координаты цели
+    // Буферы для накопления точек
     let mX = [0], mY = [0], mZ = [0];
-    let tX = [4000], tY = [6000], tZ = [4000]; // Исправлено на 4000,6000,4000
+    let tX = [4000], tY = [6000], tZ = [4000];
 
     socket.onopen = function() {
         socket.send(JSON.stringify({
-                wind_speed: Number(wsInput.value),
-                wind_dir: Number(wdInput.value),
-                precision: document.getElementById('precision-select').value
-            }));
-        // During simulation show only the default fields
-        // hide the extra rows during the run
+            wind_speed: Number(wsInput.value),
+            wind_dir: Number(wdInput.value),
+            precision: document.getElementById('precision-select').value,
+            action: 'simulate',  // Указываем, что это симуляция
+            trajectory_data: calculatedTrajectory  // Передаем рассчитанную траекторию
+        }));
+
         document.getElementById('min-dist-row').style.display = 'none';
         document.getElementById('closest-time-row').style.display = 'none';
     };
 
     socket.onmessage = function(event) {
         const data = JSON.parse(event.data);
-
-        // Скрываем индикатор загрузки при получении первого сообщения
-        hideLoading();
 
         // time may be sent as formatted string from server; ensure two decimals
         const timeStr = (typeof data.time === 'string') ? data.time : Number(data.time).toFixed(2);
@@ -126,7 +197,8 @@ function startSimulation() {
         if (data.hit) {
             // On hit: stop simulation and keep extra rows hidden
             isRunning = false;
-            document.getElementById('start-btn').disabled = false;
+            document.getElementById('simulate-btn').disabled = false;
+            document.getElementById('calculate-btn').disabled = false;
             try { socket.close(); } catch (e) {}
             document.getElementById('min-dist-row').style.display = 'none';
             document.getElementById('closest-time-row').style.display = 'none';
@@ -141,7 +213,8 @@ function startSimulation() {
         if (data.note === 'simulation_finished_no_hit') {
             // On miss: show extra rows and set speed to closest_missile_speed if provided
             isRunning = false;
-            document.getElementById('start-btn').disabled = false;
+            document.getElementById('simulate-btn').disabled = false;
+            document.getElementById('calculate-btn').disabled = false;
             try { socket.close(); } catch (e) {}
             console.log('Simulation finished without hit; final summary received.');
             if (data.min_distance !== undefined && data.min_distance !== null) {
@@ -158,15 +231,33 @@ function startSimulation() {
 
     socket.onclose = function() {
         isRunning = false;
-        document.getElementById('start-btn').disabled = false;
-        hideLoading(); // Убедимся, что индикатор скрыт при закрытии соединения
-        console.log("Connection closed");
+        document.getElementById('simulate-btn').disabled = false;
+        document.getElementById('calculate-btn').disabled = false;
+        console.log("Simulation connection closed");
     };
 
     socket.onerror = function(error) {
         isRunning = false;
-        document.getElementById('start-btn').disabled = false;
-        hideLoading(); // Убедимся, что индикатор скрыт при ошибке
-        console.log("WebSocket error:", error);
+        document.getElementById('simulate-btn').disabled = false;
+        document.getElementById('calculate-btn').disabled = false;
+        console.log("Simulation WebSocket error:", error);
     };
 }
+
+// Сброс расчетов при изменении параметров
+function resetCalculation() {
+    calculatedTrajectory = null;
+    hideSimulateButton();
+}
+
+wsInput.oninput = function() {
+    updateInputs();
+    resetCalculation();
+};
+
+wdInput.oninput = function() {
+    updateInputs();
+    resetCalculation();
+};
+
+document.getElementById('precision-select').onchange = resetCalculation;
