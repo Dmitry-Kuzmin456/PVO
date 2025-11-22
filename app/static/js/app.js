@@ -53,16 +53,16 @@ function startSimulation() {
     // Показываем компактный индикатор загрузки
     showLoading();
 
-    // Очищаем графики
-    Plotly.restyle('graph', {x: [[0]], y: [[0]], z: [[0]]}, [0]);
-    Plotly.restyle('graph', {x: [[2000]], y: [[5000]], z: [[3000]]}, [1]);
+    // Очищаем графики с правильными начальными координатами
+    Plotly.restyle('graph', {x: [[0]], y: [[0]], z: [[0]]}, [0]); // Ракета
+    Plotly.restyle('graph', {x: [[4000]], y: [[6000]], z: [[4000]]}, [1]); // Цель - исправлено на 4000,6000,4000
 
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     socket = new WebSocket(`${protocol}://${window.location.host}/ws/simulate`);
 
-    // Буферы для накопления точек
+    // Буферы для накопления точек - тоже исправляем начальные координаты цели
     let mX = [0], mY = [0], mZ = [0];
-    let tX = [4000], tY = [6000], tZ = [4000];
+    let tX = [4000], tY = [6000], tZ = [4000]; // Исправлено на 4000,6000,4000
 
     socket.onopen = function() {
         socket.send(JSON.stringify({
