@@ -16,7 +16,7 @@ Plotly.newPlot('graph', [{
     x: [0], y: [0], z: [0], marker: {color:'red', size:4}
 }, {
     type: 'scatter3d', mode: 'lines+markers', name: 'Цель',
-    x: [2000], y: [5000], z: [3000], marker: {color:'blue', size:4}
+    x: [4000], y: [6000], z: [4000], marker: {color:'blue', size:4}
 }], layout);
 
 const wsInput = document.getElementById('wind-speed');
@@ -51,7 +51,7 @@ function startSimulation() {
 
     // Буферы для накопления точек
     let mX = [0], mY = [0], mZ = [0];
-    let tX = [2000], tY = [5000], tZ = [3000];
+    let tX = [4000], tY = [6000], tZ = [4000];
 
     socket.onopen = function() {
         socket.send(JSON.stringify({
