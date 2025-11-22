@@ -5,7 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 import asyncio
 import numpy as np
-from .models import Missile, Target, find_perfect_trajectory
+from .models import Missile, Target, find_perfect_trajectory, NEW_YORK_LATITUDE
 
 # Simple in-memory cache for computed launch vectors
 _LAUNCH_VECTOR_CACHE = {}
@@ -18,7 +18,8 @@ def _make_cache_key(missile_template, target_config, wind_vec, precision):
         int(target_config['x']), int(target_config['y']), int(target_config['z']),
         int(target_config['vx']), int(target_config['vy']), int(target_config['vz']),
         round(m.mass_empty, 3), round(m.fuel_mass, 3), round(m.thrust_force, 3),
-        precision
+        precision,
+        round(m.latitude, 1)  # Добавляем широту в ключ кэша
     )
     return key
 
@@ -59,7 +60,7 @@ async def websocket_endpoint(websocket: WebSocket):
             'vx': -50, 'vy': -300, 'vz': -50  # Скорость (м/с)
         }
 
-        # 3. Определяем РАКЕТУ
+        # 3. Определяем РАКЕТУ (с широтой Нью-Йорка)
         missile_template = Missile(
             x=0, y=0, z=0,
             mass=60.0,
@@ -67,7 +68,8 @@ async def websocket_endpoint(websocket: WebSocket):
             burn_time=10.0,
             thrust=8000.0,  # Достаточная тяга
             drag_coeff=0.2,
-            area=0.05
+            area=0.05,
+            latitude=NEW_YORK_LATITUDE  # Широта Нью-Йорка
         )
 
         # 4. ГЛАВНЫЙ РАСЧЕТ (Solving)
@@ -80,6 +82,7 @@ async def websocket_endpoint(websocket: WebSocket):
         perfect_launch_vector = None
         if cache_key in _LAUNCH_VECTOR_CACHE:
             perfect_launch_vector = _LAUNCH_VECTOR_CACHE[cache_key]
+            logger.info("Using cached launch vector")
         else:
             # choose parameters for fast vs accurate
             if precision == 'fast':
@@ -90,14 +93,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 # accurate: defaults in function (higher fidelity)
                 params = {}
 
+            logger.info(f"Calculating new trajectory with precision: {precision}")
             perfect_launch_vector = await asyncio.to_thread(
                 find_perfect_trajectory, missile_template, target_config, initial_wind, **params
             )
             # cache result
             try:
                 _LAUNCH_VECTOR_CACHE[cache_key] = perfect_launch_vector
-            except Exception:
-                pass
+                logger.info("Cached new launch vector")
+            except Exception as e:
+                logger.error(f"Failed to cache result: {e}")
 
         # 5. Запуск реальной симуляции
         missile = missile_template.copy()

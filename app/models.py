@@ -5,14 +5,16 @@ from loguru import logger
 G = 9.81
 RHO = 1.225  # Плотность воздуха
 OMEGA_EARTH = 7.2921e-5
+NEW_YORK_LATITUDE = 40.7  # Широта Нью-Йорка
 
 
 class Missile:
-    def __init__(self, x, y, z, mass, fuel_mass, burn_time, thrust, drag_coeff, area):
+    def __init__(self, x, y, z, mass, fuel_mass, burn_time, thrust, drag_coeff, area, latitude=NEW_YORK_LATITUDE):
         self.pos = np.array([x, y, z], dtype=float)
         self.vel = np.array([0.0, 0.0, 0.0], dtype=float)
         # Для симуляции копии
-        self.init_args = (x, y, z, mass, fuel_mass, burn_time, thrust, drag_coeff, area)
+        self.latitude = latitude
+        self.init_args = (x, y, z, mass, fuel_mass, burn_time, thrust, drag_coeff, area, latitude)
 
         self.mass_empty = mass
         self.fuel_mass = fuel_mass
@@ -27,6 +29,26 @@ class Missile:
     def copy(self):
         """Создает точную копию ракеты для виртуальных расчетов"""
         return Missile(*self.init_args)
+
+    def _calculate_coriolis_force(self, velocity):
+        """Расчет силы Кориолиса для текущей широты"""
+        omega_earth = 7.2921e-5  # рад/с
+
+        # Преобразование широты в радианы
+        lat_rad = np.radians(self.latitude)
+
+        # Вектор угловой скорости Земли для данной широты
+        # Для северного полушария: ω = [0, ω*cos(φ), ω*sin(φ)]
+        omega_vector = np.array([
+            0,
+            omega_earth * np.cos(lat_rad),
+            omega_earth * np.sin(lat_rad)
+        ])
+
+        # Сила Кориолиса: F = -2m(ω × v)
+        coriolis_force = -2 * self.current_mass * np.cross(omega_vector, velocity)
+
+        return coriolis_force
 
     def update(self, dt, wind_vector, launch_direction):
         """
@@ -71,8 +93,11 @@ class Missile:
             force_mag = 0.5 * RHO * self.cd * self.area * (v_rel_mag ** 2)
             F_drag = -force_mag * (v_rel / v_rel_mag)
 
+        # Г. СИЛА КОРИОЛИСА (НОВОЕ!)
+        F_coriolis = self._calculate_coriolis_force(self.vel)
+
         # Сумма сил
-        F_total = F_thrust + F_gravity + F_drag
+        F_total = F_thrust + F_gravity + F_drag + F_coriolis
 
         # 3. Интеграция — используем RK4 для лучшей точности
         # Состояние: pos (3), vel (3), fuel_remaining (1), time_elapsed (1)
@@ -95,7 +120,10 @@ class Missile:
                 force_mag_local = 0.5 * RHO * self.cd * self.area * (v_rel_mag_local ** 2)
                 F_d = -force_mag_local * (v_rel_local / v_rel_mag_local)
 
-            F_tot = F_t + F_g + F_d
+            # СИЛА КОРИОЛИСА в производных (НОВОЕ!)
+            F_c = self._calculate_coriolis_force(vel)
+
+            F_tot = F_t + F_g + F_d + F_c
             acc_local = F_tot / max(current_mass, 1e-6)
 
             # Расход топлива (dm/dt)
@@ -173,7 +201,8 @@ def find_perfect_trajectory(missile_template, target_config, initial_wind,
     Запускает виртуальные симуляции, подбирая идеальный вектор запуска.
     Параметры позволяют управлять точностью и временем симуляции.
     """
-    logger.info(f"Calculations started. Wind: {initial_wind} | sim_time_max={sim_time_max} az_steps={az_steps} el_steps={el_steps} coarse_dt={coarse_dt} refine_dt={refine_dt} final_dt={final_dt}")
+    logger.info(
+        f"Calculations started. Wind: {initial_wind} | sim_time_max={sim_time_max} az_steps={az_steps} el_steps={el_steps} coarse_dt={coarse_dt} refine_dt={refine_dt} final_dt={final_dt}")
 
     # 1. Данные цели
     t_pos_0 = np.array([target_config['x'], target_config['y'], target_config['z']])
@@ -250,7 +279,6 @@ def find_perfect_trajectory(missile_template, target_config, initial_wind,
                     best_az = az
                     best_el = el
 
-    # Further local optimization: coordinate descent on az/el with decreasing step sizes
     # Further local optimization: coordinate descent on az/el with decreasing step sizes
     step_sizes = [0.5, 0.2, 0.1, 0.05]
     for step in step_sizes:
