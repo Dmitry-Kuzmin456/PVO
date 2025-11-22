@@ -4,11 +4,8 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="6c00859d-b60f-4ab5-ad30-5aac996457cc" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/models.py" afterDir="false" />
+    <list default="true" id="6c00859d-b60f-4ab5-ad30-5aac996457cc" name="Changes" comment="with Coriolis Force">
+      <change afterPath="$PROJECT_DIR$/physical_model.md" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -97,11 +94,24 @@
       <updated>1763756891671</updated>
       <workItem from="1763756892713" duration="5200000" />
       <workItem from="1763841627413" duration="248000" />
-      <workItem from="1763841886685" duration="4783000" />
+      <workItem from="1763841886685" duration="5214000" />
     </task>
+    <task id="LOCAL-00001" summary="with Coriolis Force">
+      <option name="closed" value="true" />
+      <created>1763847768473</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1763847768473</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="with Coriolis Force" />
+    <option name="LAST_COMMIT_MESSAGE" value="with Coriolis Force" />
   </component>
 </project>
