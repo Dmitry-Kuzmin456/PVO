@@ -4,12 +4,8 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="6c00859d-b60f-4ab5-ad30-5aac996457cc" name="Changes" comment="new task">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+    <list default="true" id="6c00859d-b60f-4ab5-ad30-5aac996457cc" name="Changes" comment="Спокойной ночи">
       <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/app/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/static/js/app.js" beforeDir="false" afterPath="$PROJECT_DIR$/app/static/js/app.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/app/templates/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/app/templates/index.html" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -98,7 +94,7 @@
       <updated>1763756891671</updated>
       <workItem from="1763756892713" duration="5200000" />
       <workItem from="1763841627413" duration="248000" />
-      <workItem from="1763841886685" duration="8514000" />
+      <workItem from="1763841886685" duration="8848000" />
     </task>
     <task id="LOCAL-00001" summary="with Coriolis Force">
       <option name="closed" value="true" />
@@ -148,7 +144,23 @@
       <option name="project" value="LOCAL" />
       <updated>1763850436891</updated>
     </task>
-    <option name="localTasksCounter" value="7" />
+    <task id="LOCAL-00007" summary="Устал по английски коммиты писать&#10;Сначала теперь траектория вычисляется и потом нажатием на кнопку анимация запускается">
+      <option name="closed" value="true" />
+      <created>1763851568611</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1763851568611</updated>
+    </task>
+    <task id="LOCAL-00008" summary="Спокойной ночи">
+      <option name="closed" value="true" />
+      <created>1763851614446</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1763851614446</updated>
+    </task>
+    <option name="localTasksCounter" value="9" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -160,6 +172,8 @@
     <MESSAGE value="with animation of calculations" />
     <MESSAGE value="same coordinates in preview and simulation" />
     <MESSAGE value="new task" />
-    <option name="LAST_COMMIT_MESSAGE" value="new task" />
+    <MESSAGE value="Устал по английски коммиты писать&#10;Сначала теперь траектория вычисляется и потом нажатием на кнопку анимация запускается" />
+    <MESSAGE value="Спокойной ночи" />
+    <option name="LAST_COMMIT_MESSAGE" value="Спокойной ночи" />
   </component>
 </project>
