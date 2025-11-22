@@ -36,11 +36,22 @@ function updateInputs() {
 wsInput.oninput = updateInputs;
 wdInput.oninput = updateInputs;
 
+function showLoading() {
+    document.getElementById('loading-indicator').style.display = 'flex';
+}
+
+function hideLoading() {
+    document.getElementById('loading-indicator').style.display = 'none';
+}
+
 function startSimulation() {
     if (isRunning) return;
 
     document.getElementById('start-btn').disabled = true;
     isRunning = true;
+
+    // Показываем компактный индикатор загрузки
+    showLoading();
 
     // Очищаем графики
     Plotly.restyle('graph', {x: [[0]], y: [[0]], z: [[0]]}, [0]);
@@ -67,6 +78,9 @@ function startSimulation() {
 
     socket.onmessage = function(event) {
         const data = JSON.parse(event.data);
+
+        // Скрываем индикатор загрузки при получении первого сообщения
+        hideLoading();
 
         // time may be sent as formatted string from server; ensure two decimals
         const timeStr = (typeof data.time === 'string') ? data.time : Number(data.time).toFixed(2);
@@ -145,6 +159,14 @@ function startSimulation() {
     socket.onclose = function() {
         isRunning = false;
         document.getElementById('start-btn').disabled = false;
+        hideLoading(); // Убедимся, что индикатор скрыт при закрытии соединения
         console.log("Connection closed");
+    };
+
+    socket.onerror = function(error) {
+        isRunning = false;
+        document.getElementById('start-btn').disabled = false;
+        hideLoading(); // Убедимся, что индикатор скрыт при ошибке
+        console.log("WebSocket error:", error);
     };
 }

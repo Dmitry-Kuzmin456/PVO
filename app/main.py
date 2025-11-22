@@ -48,6 +48,9 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.close()
             return
 
+        # Небольшая задержка для демонстрации индикатора загрузки (опционально)
+        # await asyncio.sleep(1)
+
         # Формируем вектор начального ветра
         wx = start_ws * np.cos(np.radians(start_wd))
         wy = start_ws * np.sin(np.radians(start_wd))

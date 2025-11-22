@@ -31,6 +31,12 @@
                 <option value="accurate">Accurate (точно)</option>
             </select>
             <button id="start-btn" onclick="startSimulation()">Запуск</button>
+
+            <!-- Компактный индикатор загрузки под кнопкой -->
+            <div id="loading-indicator" class="loading-indicator" style="display: none;">
+                <div class="compact-spinner"></div>
+                <span>Вычисление траектории...</span>
+            </div>
         </div>
         <div class="visual">
             <div id="graph"></div>
